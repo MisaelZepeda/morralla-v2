@@ -1,0 +1,15 @@
+{
+  "name": "morralla-push",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail",
+    "test": "node --test \"tests/*.test.js\"",
+    "anunciar": "node anunciar.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

@@ -1,0 +1,14 @@
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores y herramientas locales
+.vscode/
+.claude/
+
+# Otros
+node_modules/
+*.log
+*.zip
+*.rar

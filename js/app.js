@@ -1,0 +1,458 @@
+// Arranque de Morralla: sesión, migración, datos, rutas y acciones globales.
+
+import { auth, userRef } from './firebase-init.js';
+import { store, sel, setDatos, setUi, suscribir } from './core/store.js';
+import * as db from './core/db.js';
+import * as A from './core/actions.js';
+import { definirRuta, iniciarRouter, alNavegar, rutaActual, navegar } from './core/router.js';
+import { iniciarEventos, on } from './core/eventos.js';
+import { abrirHoja, cerrarHoja, toast, confirmar } from './components/capas.js';
+import { abrirRegistro } from './components/registro.js';
+import { abrirFormCuenta, abrirFormMeta, abrirMovimientoMeta, abrirFormRecurrente, abrirFormCategoria } from './components/formularios.js';
+import { avatarHTML, vacioHTML } from './components/piezas.js';
+import { icon } from './lib/icons.js';
+import { escapeHtml } from './lib/format.js';
+import { aplicarApariencia, leerApariencia, temaEfectivo, temaElegido, alternarTemaSesion } from './lib/apariencia.js';
+import { construirDemo } from './lib/demo-data.js';
+import { compartirTarjeta } from './lib/compartir.js';
+import { migrarV1 } from './domain/migracion.js';
+import { pendientes } from './domain/recurrentes.js';
+import { hoyISO } from './domain/fechas.js';
+import { mostrarAcceso, ocultarAcceso, mostrarMigracion, nombreRegistro } from './views/acceso.js';
+import { confirmarMigracion, selectorTema } from './views/ajustes.js';
+import './components/gestos.js';
+import './components/detalle-tx.js';
+import { iniciarPush } from './lib/push.js';
+import { consejoAlAzar } from './domain/consejos.js';
+import { buscarPorNombre } from './domain/autocategoria.js';
+
+import * as inicio from './views/inicio.js';
+import * as movimientos from './views/movimientos.js';
+import * as analisis from './views/analisis.js';
+import * as planear from './views/planear.js';
+import * as cuentas from './views/cuentas.js';
+import * as cuenta from './views/cuenta.js';
+import * as ajustes from './views/ajustes.js';
+import * as mas from './views/mas.js';
+import * as teDeben from './views/te-deben.js';
+
+definirRuta('/inicio', inicio);
+definirRuta('/movimientos', movimientos);
+definirRuta('/analisis', analisis);
+definirRuta('/planear', planear);
+definirRuta('/planear/:tab', planear);
+definirRuta('/cuentas', cuentas);
+definirRuta('/cuenta/:id', cuenta);
+definirRuta('/ajustes', ajustes);
+definirRuta('/mas', mas);
+definirRuta('/te-deben', teDeben);
+definirRuta('/nuevo', {}); // Siri y Atajos: abre el registro prellenado
+
+// Barra de abajo: lo de todos los días. Lo demás vive en "Más".
+const NAV = [
+    ['#/inicio', 'home', 'Inicio', ['/inicio']],
+    ['#/movimientos', 'list', 'Movimientos', ['/movimientos']],
+    ['#/cuentas', 'landmark', 'Cuentas', ['/cuentas', '/cuenta/']],
+    ['#/mas', 'more-horizontal', 'Más', ['/mas', '/analisis', '/planear', '/ajustes', '/te-deben']],
+];
+
+// Barra lateral (computadora): todo a la vista.
+const LATERAL = [
+    ['#/inicio', 'home', 'Inicio', ['/inicio']],
+    ['#/movimientos', 'list', 'Movimientos', ['/movimientos']],
+    ['#/cuentas', 'landmark', 'Cuentas', ['/cuentas', '/cuenta/']],
+    ['#/analisis', 'bar-chart', 'Análisis', ['/analisis']],
+    ['#/te-deben', 'share', 'Te deben', ['/te-deben']],
+    null,
+    ['#/planear/presupuestos', 'target', 'Presupuestos', ['/planear/presupuestos', '/planear?', '/planear']],
+    ['#/planear/calendario', 'calendar', 'Calendario de pagos', ['/planear/calendario']],
+    ['#/planear/metas', 'shield', 'Metas de ahorro', ['/planear/metas']],
+    ['#/planear/recurrentes', 'repeat', 'Pagos fijos', ['/planear/recurrentes']],
+    ['#/planear/retos', 'check-circle', 'Retos', ['/planear/retos']],
+];
+
+// ---------- Render ----------
+function activo(prefijos) { const p = rutaActual().path || ''; return prefijos.some(x => x.endsWith('/') || x.includes('?') ? p.startsWith(x) : p === x || p.startsWith(x + '/') || p.startsWith(x + '?')); }
+// En la lateral, Planear sin pestaña cuenta como Presupuestos.
+function activoLateral(prefijos) { const p = rutaActual().path || ''; return prefijos[0] === '/planear/presupuestos' ? (p === '/planear' || p.startsWith('/planear/presupuestos') || p.startsWith('/planear?')) : activo(prefijos); }
+
+function pintarNav() {
+    document.getElementById('sidebar').innerHTML = `
+        <div class="brand"><img src="logo.svg" alt="">morralla</div>
+        <button class="btn btn-primary side-add" data-action="nuevo">${icon('plus')}Nuevo movimiento</button>
+        ${LATERAL.map(x => x ? `<a class="side-link ${activoLateral(x[3]) ? 'activo' : ''}" href="${x[0]}">${icon(x[1])}${x[2]}</a>` : '<div class="side-sep"></div><p class="side-label">Planear</p>').join('')}
+        <div class="side-bottom"><a class="side-link ${activo(['/ajustes']) ? 'activo' : ''}" href="#/ajustes">${icon('settings')}Ajustes</a></div>`;
+    const [a, b, c, d] = NAV;
+    const tab = ([h, i, t, p]) => `<a class="tab ${activo(p) ? 'activo' : ''}" href="${h}">${icon(i)}<span>${t}</span></a>`;
+    document.getElementById('tabbar').innerHTML = `<svg class="tb-forma" aria-hidden="true"><path class="tb-relleno"/><path class="tb-linea"/></svg><span class="tb-burbuja" aria-hidden="true"></span>${tab(a)}${tab(b)}<button class="tab-add" data-action="nuevo" aria-label="Nuevo movimiento">${icon('plus')}</button>${tab(c)}${tab(d)}`;
+    dibujarBarra();
+}
+
+function pintarTop(vista, params) {
+    const t = vista.titulo?.(params) || {};
+    const avisos = sel.avisos().length;
+    const oscuro = temaEfectivo() === 'oscuro';
+    document.getElementById('top').innerHTML = `
+        ${t.atras ? `<a class="icon-btn top-back" href="${t.atras}" aria-label="Volver">${icon('chevron-right', 'rot180')}</a>` : ''}
+        <div class="top-title"><h1>${escapeHtml(t.titulo || '')}</h1>${t.subtitulo ? `<p>${escapeHtml(t.subtitulo)}</p>` : ''}</div>
+        ${store.demo ? '<span class="badge badge-warn">Demo</span>' : ''}
+        <button class="icon-btn" data-action="togglePrivacidad" aria-label="${store.ui.privacidad ? 'Mostrar montos' : 'Ocultar montos'}" title="${store.ui.privacidad ? 'Mostrar montos' : 'Ocultar montos'}">${icon(store.ui.privacidad ? 'eye-off' : 'eye')}</button>
+        <button class="icon-btn" data-action="alternarTema" aria-label="${oscuro ? 'Ver en tema claro durante esta sesión' : 'Ver en tema oscuro durante esta sesión'}" title="${oscuro ? 'Tema claro (solo esta sesión)' : 'Tema oscuro (solo esta sesión)'}">${icon(oscuro ? 'sun' : 'moon')}</button>
+        <button class="icon-btn" data-action="abrirAvisos" aria-label="Avisos">${icon('bell')}${avisos ? '<span class="dot"></span>' : ''}</button>
+        <button class="avatar-btn" data-action="abrirMenu" aria-label="Menú">${avatarHTML(sel.perfil())}</button>`;
+}
+
+function pintarVista(nuevaVista = false) {
+    if (!store.cargado) return;
+    const r = rutaActual();
+    if (!r?.vista) return;
+    if (r.patron === '/nuevo') { abrirDesdeAtajo(r.params); return; }
+    const el = document.getElementById('vista');
+    const scroll = window.scrollY;
+    pintarNav();
+    pintarTop(r.vista, r.params);
+    el.innerHTML = r.vista.render(r.params);
+    if (nuevaVista) { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; window.scrollTo(0, 0); }
+    else window.scrollTo(0, scroll);
+    r.vista.montar?.(el, r.params);
+}
+
+// #/nuevo?tipo=gasto&monto=250&cat=super&desc=Oxxo&cuenta=nu
+// La categoría y la cuenta se buscan por nombre; el monto acepta "250", "$1,250.50" o "250 pesos".
+function abrirDesdeAtajo(q) {
+    location.replace('#/inicio');
+    const tipo = ['gasto', 'ingreso', 'transferencia'].includes(q.tipo) ? q.tipo : 'gasto';
+    const monto = parseFloat(String(q.monto || '').replace(/,/g, '').replace(/[^0-9.]/g, '')) || 0;
+    const cat = tipo === 'gasto' && q.cat ? buscarPorNombre(q.cat, sel.categorias()) : null;
+    const cuenta = q.cuenta ? buscarPorNombre(q.cuenta, sel.cuentas()) : null;
+    setTimeout(() => abrirRegistro({
+        tipo, monto: monto ? Math.round(monto * 100) / 100 : undefined,
+        desc: (q.desc || '').slice(0, 80), categoriaId: cat?.id, cuentaId: cuenta?.id, desdeAtajo: true,
+    }), 50);
+}
+
+alNavegar((r, cambio) => { if (cambio) r.vista.alEntrar?.(r.params); pintarVista(cambio); });
+suscribir(() => pintarVista(false));
+document.addEventListener('apariencia', () => { pintarVista(false); repintarMenu(); });
+
+// ---------- Datos ----------
+const CACHE = (uid) => `financiapp_v4_${uid}`;
+
+function alRecibirDatos(datos, uid) {
+    if (uid) { try { localStorage.setItem(CACHE(uid), JSON.stringify(datos)); } catch { /* sin espacio */ } }
+    const aj = datos.ajustes || {};
+    const ap = leerApariencia();
+    const guardada = aj.apariencia || {};
+    if ((guardada.tema && guardada.tema !== ap.tema) || (guardada.acento && guardada.acento !== ap.acento)) aplicarApariencia({ tema: guardada.tema, acento: guardada.acento });
+    setDatos(datos);
+    mostrarApp();
+}
+
+// La pantalla de carga muestra un consejo de Tlaco; se deja al menos
+// 1.6 s para alcanzar a leerlo (tocarla la cierra antes).
+const inicioCarga = performance.now();
+function ocultarCarga() {
+    const el = document.getElementById('cargando');
+    if (el.hidden) return;
+    setTimeout(() => { el.hidden = true; }, Math.max(0, 1600 - (performance.now() - inicioCarga)));
+}
+document.getElementById('cargando').addEventListener('click', (e) => { e.currentTarget.hidden = true; });
+(function mostrarConsejoCarga() {
+    document.getElementById('consejo-carga-texto').textContent = consejoAlAzar();
+    document.getElementById('consejo-carga').hidden = false;
+})();
+
+function mostrarApp() {
+    ocultarAcceso();
+    document.getElementById('app').hidden = false;
+    ocultarCarga();
+    if (!store.demo) iniciarPush((n) => toast(n === 1 ? 'Guardé 1 movimiento que le dictaste a Siri' : `Guardé ${n} movimientos que le dictaste a Siri`));
+}
+
+// Al tocar un aviso con la app abierta, el service worker pide ir a su pantalla.
+navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.tipo === 'navegar' && /^#\//.test(e.data.ruta || '')) navegar(e.data.ruta); });
+
+function entrarDemo() {
+    store.demo = true;
+    store.usuario = null;
+    db.conectarDemo(construirDemo(), (d) => alRecibirDatos(d, null));
+    if (!location.hash) location.hash = '#/inicio';
+}
+
+async function entrarUsuario(user) {
+    store.usuario = { uid: user.uid, email: user.email };
+    store.demo = false;
+    const cache = localStorage.getItem(CACHE(user.uid));
+    if (cache) { try { alRecibirDatos(JSON.parse(cache), null); } catch { /* caché dañada */ } }
+    try {
+        if (await db.existeV4(user.uid)) {
+            db.conectarFirebase(user.uid, (d) => alRecibirDatos(d, user.uid));
+            return;
+        }
+        const v1 = await db.leerV1(user.uid);
+        const resultado = migrarV1(v1);
+        if (nombreRegistro && !v1.perfil?.nombre) resultado.v4.perfil.nombre = nombreRegistro;
+        const conectar = async () => {
+            await db.escribirV4(user.uid, resultado.v4);
+            db.conectarFirebase(user.uid, (d) => alRecibirDatos(d, user.uid));
+        };
+        ocultarCarga();
+        // Cuenta nueva o sin datos: se crea directo. Con datos: se muestra la comparación.
+        if (!resultado.resumen.cuentas && !resultado.resumen.transacciones) await conectar();
+        else mostrarMigracion(resultado, conectar);
+    } catch (e) {
+        console.error(e);
+        document.getElementById('cargando').hidden = true;
+        toast('No se pudieron cargar tus datos: ' + e.message, { tipo: 'error', duracion: 8000 });
+    }
+}
+
+// ---------- Acciones globales ----------
+const id = (el) => el.dataset.id;
+on('nuevo', () => abrirRegistro());
+on('editarTx', (el) => abrirRegistro({ id: id(el) }));
+on('cerrarHoja', () => cerrarHoja());
+on('irA', (el) => { location.hash = el.dataset.href; });
+on('nuevaCuenta', () => abrirFormCuenta());
+on('editarCuenta', (el) => abrirFormCuenta(id(el)));
+on('gastoCuenta', (el) => abrirRegistro({ tipo: 'gasto', cuentaId: id(el) }));
+on('ingresoCuenta', (el) => abrirRegistro({ tipo: 'ingreso', cuentaId: id(el) }));
+on('traspasar', (el) => abrirRegistro({ tipo: 'transferencia', cuentaId: id(el) }));
+on('rendimiento', (el) => abrirRegistro({ tipo: 'ingreso', cuentaId: id(el), subtipo: 'rendimiento' }));
+on('cashback', (el) => abrirRegistro({ tipo: 'ingreso', cuentaId: id(el), subtipo: 'cashback' }));
+function pagarTarjeta(tarjetaId) {
+    // Origen: la cuenta con la que se pagó esta tarjeta la última vez.
+    const ultimo = sel.transacciones().find(t => t.tipo === 'transferencia' && t.cuentaDestinoId === tarjetaId && sel.cuenta(t.cuentaId));
+    const origen = ultimo ? sel.cuenta(ultimo.cuentaId) : (sel.cuentas().find(c => c.tipo === 'debito') || sel.cuentas().find(c => c.tipo !== 'credito'));
+    abrirRegistro({ tipo: 'transferencia', cuentaId: origen?.id, cuentaDestinoId: tarjetaId });
+}
+on('pagarTarjeta', (el) => pagarTarjeta(id(el)));
+on('marcarPagada', async (el) => { await A.marcarTarjetaPagada(id(el), true); toast('Tarjeta marcada como pagada'); });
+on('desmarcarPagada', async (el) => { await A.marcarTarjetaPagada(id(el), false); toast('Se quitó la marca de pagada'); });
+on('compartirCuenta', (el) => compartirTarjeta(id(el)));
+on('nuevaMeta', () => abrirFormMeta());
+on('editarMeta', (el) => abrirFormMeta(id(el)));
+on('abonarMeta', (el) => abrirMovimientoMeta(id(el), false));
+on('retirarMeta', (el) => abrirMovimientoMeta(id(el), true));
+on('nuevoRecurrente', () => abrirFormRecurrente());
+on('editarRecurrente', (el) => abrirFormRecurrente(id(el)));
+on('nuevaCategoria', () => abrirFormCategoria());
+on('editarCategoria', (el) => abrirFormCategoria(id(el)));
+on('generarRecurrente', async (el) => {
+    const rec = sel.recurrentes().find(r => r.id === id(el)); if (!rec) return;
+    // Si aún no toca, se adelanta: se registra hoy y avanza al siguiente periodo.
+    if (rec.proximaFecha > hoyISO()) await A.adelantarRecurrente(rec); else await A.generarRecurrentes([rec]);
+    toast(`${rec.desc} registrado con fecha de hoy`);
+});
+on('generarPendientes', async () => {
+    const pend = pendientes(sel.recurrentes()); if (!pend.length) return;
+    await A.generarRecurrentes(pend); toast(`${pend.length} pago${pend.length > 1 ? 's' : ''} fijo${pend.length > 1 ? 's' : ''} registrado${pend.length > 1 ? 's' : ''}`);
+});
+on('togglePrivacidad', () => {
+    const p = !store.ui.privacidad;
+    document.body.classList.toggle('privacidad', p);
+    try { localStorage.setItem('financiapp_privacidad', p ? '1' : ''); } catch { /* */ }
+    setUi({ privacidad: p });
+});
+
+// Panel de avisos
+function avisosHTML() {
+    const avisos = sel.avisos();
+    if (!avisos.length) return vacioHTML('bell', 'No tienes avisos pendientes.');
+    return `${avisos.length > 1 ? `<div style="text-align:right; margin:-8px 0 4px;"><button class="link" data-action="descartarTodos">Borrar todos</button></div>` : ''}
+        ${avisos.map(a => `<div class="aviso">
+            <div class="aviso-ico tono-${a.tono}">${icon(a.icono)}</div>
+            <div class="aviso-body" data-action="irAviso" data-ruta="${escapeHtml(a.ruta || '')}"><b>${escapeHtml(a.titulo)}</b><span>${escapeHtml(a.detalle || '')}</span></div>
+            <button class="aviso-x" data-action="descartarAviso" data-key="${escapeHtml(a.key)}" aria-label="Borrar aviso">${icon('x')}</button>
+        </div>`).join('')}`;
+}
+const repintarAvisos = () => { const b = document.querySelector('#avisos-body'); if (b) b.innerHTML = avisosHTML(); };
+on('abrirAvisos', () => abrirHoja({ titulo: 'Avisos', html: `<div id="avisos-body">${avisosHTML()}</div>` }));
+on('descartarAviso', async (el) => { await A.descartarAvisos([el.dataset.key]); repintarAvisos(); });
+on('descartarTodos', async () => { await A.descartarAvisos(sel.avisos().map(a => a.key)); repintarAvisos(); });
+on('irAviso', (el) => { cerrarHoja(); if (el.dataset.ruta) navegar(el.dataset.ruta); });
+
+// Menú de la foto de perfil: accesos que no caben en la barra inferior.
+function menuHTML() {
+    const p = sel.perfil();
+    const n = sel.cuentas().length;
+    const fila = (ruta, ico, titulo, sub = '') => `<button class="fila fila-link" data-action="irMenu" data-ruta="${ruta}" style="width:100%; text-align:left;"><div class="fila-ico">${icon(ico)}</div>
+        <div class="fila-body"><div class="fila-titulo">${titulo}</div>${sub ? `<div class="fila-sub">${sub}</div>` : ''}</div>${icon('chevron-right', 'chev')}</button>`;
+    return `<div class="menu-perfil">${avatarHTML(p)}<div><b>${escapeHtml(p.nombre || 'Usuario')}</b><span class="muted">${escapeHtml(store.demo ? 'Modo demo' : store.usuario?.email || '')}</span></div></div>
+        <div class="lista">
+            ${fila('#/cuentas', 'landmark', 'Cuentas', `${n} cuenta${n === 1 ? '' : 's'} · agregar o administrar`)}
+            ${fila('#/ajustes', 'tag', 'Categorías y presupuestos')}
+            ${fila('#/ajustes', 'settings', 'Ajustes', 'Perfil, apariencia y respaldo')}
+        </div>
+        <div class="field" style="margin:18px 0 0;"><span class="label">Tema</span>${selectorTema(temaElegido())}</div>
+        <button class="btn btn-ghost btn-block" data-action="cerrarSesion" style="margin-top:18px;">${icon('log-out')}${store.demo ? 'Salir de la demo' : 'Cerrar sesión'}</button>`;
+}
+function repintarMenu() { const b = document.getElementById('menu-body'); if (b) b.innerHTML = menuHTML(); }
+on('irMenu', (el) => { cerrarHoja(); navegar(el.dataset.ruta); });
+on('abrirMenu', () => abrirHoja({ titulo: 'Menú', html: `<div id="menu-body">${menuHTML()}</div>` }));
+// Solo por esta sesión: no cambia la preferencia guardada.
+on('alternarTema', () => alternarTemaSesion());
+
+on('entrarDemo', entrarDemo);
+on('cerrarSesion', async () => {
+    if (store.demo) { location.hash = ''; location.reload(); return; }
+    const uid = store.usuario?.uid;
+    if (!(await confirmar({ titulo: 'Cerrar sesión', aceptar: 'Cerrar sesión' }))) return;
+    if (uid) localStorage.removeItem(CACHE(uid));
+    db.desconectar();
+    await auth.signOut();
+    location.reload();
+});
+on('ajRecopiar', async () => {
+    const uid = store.usuario?.uid; if (!uid) return;
+    const resultado = migrarV1(await db.leerV1(uid));
+    confirmarMigracion({
+        titulo: 'Copiar datos de la versión actual',
+        resultado,
+        alAceptar: async () => {
+            // Conserva ajustes de la prueba (tema, acento) al recopiar.
+            resultado.v4.ajustes = { ...store.datos.ajustes };
+            await db.escribirV4(uid, resultado.v4);
+            toast('Datos copiados de nuevo');
+        },
+    });
+});
+
+// Atajo de teclado: "n" abre un movimiento nuevo (fuera de campos de texto).
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'n' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest('input, textarea, select, [contenteditable]') || document.querySelector('.capa')) return;
+    if (!document.getElementById('app').hidden) { e.preventDefault(); abrirRegistro(); }
+});
+
+// ---------- Inicio ----------
+aplicarApariencia();
+iniciarEventos();
+if (localStorage.getItem('financiapp_privacidad')) { document.body.classList.add('privacidad'); store.ui.privacidad = true; }
+iniciarRouter();
+
+// Limpieza única: Tlacuilo vivía en el mismo dominio (misaelzepeda.github.io)
+// y ya no existe. Se quita su service worker, su caché, sus preferencias
+// locales y sus datos en Firebase (Usuarios/{uid}/agenda).
+async function limpiarTlacuilo(uid) {
+    const marca = 'financiapp_sin_tlacuilo';
+    if (localStorage.getItem(marca) === uid) return;
+    try {
+        if ('serviceWorker' in navigator) {
+            for (const r of await navigator.serviceWorker.getRegistrations()) {
+                if (r.scope.includes('/tlacuilo/')) await r.unregister();
+            }
+        }
+        if ('caches' in window) {
+            for (const k of await caches.keys()) if (k.startsWith('tlacuilo-')) await caches.delete(k);
+        }
+        Object.keys(localStorage).filter(k => k.startsWith('tlacuilo')).forEach(k => localStorage.removeItem(k));
+        await userRef(uid, 'agenda').remove();
+        localStorage.setItem(marca, uid);
+    } catch (e) { console.warn('Limpieza de Tlacuilo pendiente', e); }
+}
+
+auth.onAuthStateChanged((user) => {
+    if (store.demo) return;
+    if (user) { entrarUsuario(user); limpiarTlacuilo(user.uid); }
+    else { document.getElementById('cargando').hidden = true; document.getElementById('app').hidden = true; mostrarAcceso(); }
+});
+
+// ---------- Actualizaciones de la app (service worker) ----------
+// Cuando se publica una versión nueva, su service worker se instala en
+// segundo plano y queda en espera; aquí se avisa y, al aceptar, se activa
+// y la app se recarga ya actualizada.
+function avisarActualizacion(sw) {
+    if (document.getElementById('aviso-actualizacion')) return;
+    const el = document.createElement('div');
+    el.id = 'aviso-actualizacion';
+    el.className = 'aviso-actualizacion';
+    el.setAttribute('role', 'status');
+    el.innerHTML = `${icon('download')}<span><b>Hay una nueva versión</b>Actualiza para ver las mejoras.</span><button class="btn btn-primary btn-sm">Actualizar</button>`;
+    el.querySelector('button').addEventListener('click', (e) => {
+        e.currentTarget.disabled = true;
+        e.currentTarget.textContent = 'Actualizando…';
+        sw.postMessage('SKIP_WAITING');
+    });
+    document.body.appendChild(el);
+}
+
+if ('serviceWorker' in navigator && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+    let recargando = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (recargando) return;
+        recargando = true;
+        location.reload();
+    });
+    window.addEventListener('load', async () => {
+        try {
+            const reg = await navigator.serviceWorker.register('./sw.js');
+            // Ya había una versión esperando (p. ej. descargada en la visita anterior).
+            if (reg.waiting && navigator.serviceWorker.controller) avisarActualizacion(reg.waiting);
+            reg.addEventListener('updatefound', () => {
+                const nuevo = reg.installing;
+                nuevo?.addEventListener('statechange', () => {
+                    if (nuevo.state === 'installed' && navigator.serviceWorker.controller) avisarActualizacion(nuevo);
+                });
+            });
+            // Buscar versiones nuevas al volver a la app y cada 30 minutos.
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+            setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+        } catch { /* sin service worker: la app funciona igual, sin modo sin conexión */ }
+    });
+}
+
+// Cristal: al bajar, la barra de pestañas se compacta; al subir, vuelve.
+{
+    let ultimo = 0, pendiente = false;
+    window.addEventListener('scroll', () => {
+        if (pendiente) return;
+        pendiente = true;
+        requestAnimationFrame(() => {
+            const y = window.scrollY, barra = document.getElementById('tabbar');
+            if (barra && Math.abs(y - ultimo) > 8) { barra.classList.toggle('compacta', y > ultimo && y > 80); ultimo = y; }
+            pendiente = false;
+        });
+    }, { passive: true });
+}
+
+// Cristal: la pestaña activa sale de la barra como un círculo que flota sobre
+// ella; la barra se hunde suavemente debajo (una sola silueta dibujada en SVG,
+// sin clip-path, para que Safari en iPhone la muestre igual).
+const BARRA = { alto: 22, mitad: 34, hondo: 18, radio: 20, burbuja: 44 };
+let posBurbuja = null;
+function dibujarBarra() {
+    const barra = document.getElementById('tabbar');
+    if (!barra || !barra.offsetWidth) return;
+    const W = barra.offsetWidth, H = barra.offsetHeight;
+    const { alto: y0, mitad: w, hondo: h, radio: r, burbuja: B } = BARRA;
+    const act = barra.querySelector('.tab.activo');
+    const cx = act ? Math.max(r + w, Math.min(W - r - w, act.offsetLeft + act.offsetWidth / 2)) : null;
+    const hueco = cx == null ? '' : `L${cx - w} ${y0} C${cx - w * 0.55} ${y0} ${cx - B / 2 - 2} ${y0 + h} ${cx} ${y0 + h} C${cx + B / 2 + 2} ${y0 + h} ${cx + w * 0.55} ${y0} ${cx + w} ${y0} `;
+    const d = `M${r} ${y0} ${hueco}L${W - r} ${y0} A${r} ${r} 0 0 1 ${W} ${y0 + r} L${W} ${H - r} A${r} ${r} 0 0 1 ${W - r} ${H} L${r} ${H} A${r} ${r} 0 0 1 0 ${H - r} L0 ${y0 + r} A${r} ${r} 0 0 1 ${r} ${y0} Z`;
+    const svg = barra.querySelector('.tb-forma');
+    if (svg) { svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.querySelectorAll('path').forEach(p => p.setAttribute('d', d)); }
+    const burbuja = barra.querySelector('.tb-burbuja');
+    if (burbuja) {
+        burbuja.hidden = cx == null;
+        if (cx != null) {
+            burbuja.innerHTML = act.querySelector('.icon')?.outerHTML || '';
+            const destino = `translate(${cx - B / 2}px, ${y0 + h - B - 4}px)`;
+            // La barra se vuelve a pintar al navegar: el círculo arranca donde estaba y se desliza.
+            if (!burbuja.dataset.listo && posBurbuja && posBurbuja !== destino) {
+                burbuja.style.transition = 'none';
+                burbuja.style.transform = posBurbuja;
+                burbuja.offsetWidth;
+                burbuja.style.transition = '';
+            }
+            burbuja.dataset.listo = '1';
+            burbuja.style.transform = destino;
+            posBurbuja = destino;
+        }
+    }
+}
+// Se redibuja cuando la barra cambia de tamaño (también al mostrarse la app).
+if ('ResizeObserver' in window) {
+    const barra = document.getElementById('tabbar');
+    if (barra) new ResizeObserver(() => dibujarBarra()).observe(barra);
+} else window.addEventListener('resize', dibujarBarra);

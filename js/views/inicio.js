@@ -1,0 +1,212 @@
+import { sel } from '../core/store.js';
+import { icon } from '../lib/icons.js';
+import { money, moneyPartes, pct, escapeHtml, nombreMes, nombreMesAnio, cuandoRelativo, fechaCorta } from '../lib/format.js';
+import { pendienteRevisar } from '../components/por-revisar.js';
+import { cuentaFilaHTML, vacioHTML, monogramaHTML, colorCategoria, icoCat } from '../components/piezas.js';
+import { barrasIngresosGastos, sparkline, donaCategorias, colorSerie, MAX_SERIES } from '../components/graficas.js';
+import { seriePatrimonio } from '../domain/saldos.js';
+import { resumenMes, serieMensual, variacion } from '../domain/analisis.js';
+import { estadoPago } from '../domain/tarjetas.js';
+import { resumenPendiente } from '../components/resumen-mes.js';
+import { contar } from '../components/efectos.js';
+import { deudasTerceros } from '../domain/terceros.js';
+import { proyectarFinDeMes } from '../domain/proyeccion.js';
+import { pendientes, proximos } from '../domain/recurrentes.js';
+import { mesKey, sumarMeses } from '../domain/fechas.js';
+
+export const titulo = () => {
+    const nombre = (sel.perfil().nombre || '').split(' ')[0];
+    return { titulo: 'Inicio', subtitulo: nombre ? `Hola, ${nombre}` : '' };
+};
+
+function heroHTML() {
+    const p = sel.patrimonio();
+    const serie = seriePatrimonio(sel.cuentas(), sel.transacciones(), 6);
+    const antes = serie[serie.length - 2]?.neto;
+    const v = variacion(p.neto, antes);
+    const partes = moneyPartes(p.neto);
+    const delta = v == null || !isFinite(v) ? '' : `<span class="badge ${v >= 0 ? 'badge-pos' : 'badge-neg'}">${icon(v >= 0 ? 'trending-up' : 'trending-down')}${pct(Math.abs(v), 1)} vs. mes anterior</span>`;
+    return `<section class="card hero">
+        <div class="hero-top">
+            <div>
+                <p class="card-meta">Tu dinero en total</p>
+                <p class="hero-total num privado" id="hero-total">${partes.signo}${partes.entero}<span class="cent">${partes.decimales}</span></p>
+                ${delta}
+            </div>
+            <div class="hero-spark"><canvas id="spark-neto" aria-label="Tendencia del patrimonio"></canvas></div>
+        </div>
+        <div class="hero-stats">
+            <div><small>Lo que tienes${p.teDeben ? ' (y te deben)' : ''}</small><b class="num privado">${money(p.activos + p.teDeben)}</b></div>
+            <div><small>Lo que debes</small><b class="num privado">${money(p.deudasPropias)}</b>${p.msiFuturo ? `<small class="hero-msi">+ <span class="privado">${money(p.msiFuturo)}</span> en MSI</small>` : ''}</div>
+            <div><small>Crédito disponible</small><b class="num privado">${money(p.creditoLibre)}</b></div>
+        </div>
+    </section>`;
+}
+
+function cuentasHTML() {
+    const cuentas = sel.cuentas();
+    if (!cuentas.length) return `<section class="card">${vacioHTML('landmark', 'Agrega tu primera cuenta para empezar.', '<a class="btn btn-primary btn-sm" href="#/cuentas">Agregar cuenta</a>')}</section>`;
+    const deb = cuentas.filter(c => c.tipo !== 'credito');
+    const cre = cuentas.filter(c => c.tipo === 'credito');
+    const bloque = (titulo, lista) => lista.length ? `<div><p class="lista-label">${titulo}</p><div class="lista">${lista.map(c => cuentaFilaHTML(c)).join('')}</div></div>` : '';
+    return `<section class="card">
+        <div class="card-head"><h2 class="card-title">Cuentas</h2><a class="link" href="#/cuentas">Administrar${icon('chevron-right')}</a></div>
+        <div class="cuentas-cols">${bloque('Débito y efectivo', deb)}${bloque('Crédito', cre)}</div>
+        <button class="btn btn-soft btn-sm" data-action="nuevaCuenta" style="margin-top:12px;">${icon('plus')}Agregar cuenta</button>
+    </section>`;
+}
+
+function mesHTML() {
+    const key = mesKey();
+    const txs = sel.transacciones();
+    const act = resumenMes(txs, key), ant = resumenMes(txs, sumarMeses(key, -1));
+    const delta = (a, b, subirBueno) => {
+        const v = variacion(a, b);
+        if (v == null || !isFinite(v)) return '<small class="muted">—</small>';
+        const bueno = (v >= 0) === subirBueno;
+        return `<small class="${v === 0 ? 'muted' : bueno ? 'pos' : 'neg'}">${v >= 0 ? '↑' : '↓'} ${pct(Math.abs(v))}</small>`;
+    };
+    return `<section class="card">
+        <div class="card-head"><h2 class="card-title">Este mes</h2><span class="card-meta">${nombreMesAnio(key)}</span></div>
+        <div class="kpis">
+            <div class="kpi"><span class="kpi-label"><i style="background:var(--series-1)"></i>Ingresos</span><b class="num privado">${money(act.ingresos)}</b>${delta(act.ingresos, ant.ingresos, true)}</div>
+            <div class="kpi"><span class="kpi-label"><i style="background:var(--series-2)"></i>Gastos</span><b class="num privado">${money(act.gastos)}</b>${delta(act.gastos, ant.gastos, false)}</div>
+            <div class="kpi"><span class="kpi-label">Balance</span><b class="num privado ${act.balance > 0 ? 'pos' : act.balance < 0 ? 'neg' : ''}">${act.balance > 0 ? '+' : ''}${money(act.balance)}</b><small class="muted">vs. ${nombreMes(sumarMeses(key, -1), 'short').toLowerCase()}: ${money(ant.balance)}</small></div>
+        </div>
+        <div class="leyenda" style="margin-top:18px;"><span><i style="background:var(--series-1)"></i>Ingresos</span><span><i style="background:var(--series-2)"></i>Gastos</span><span class="muted">Últimos 6 meses</span></div>
+        <div class="grafica" style="height:190px;"><canvas id="barras-mes" aria-label="Ingresos y gastos de los últimos 6 meses"></canvas></div>
+    </section>`;
+}
+
+function proximosHTML() {
+    const txs = sel.transacciones();
+    const items = [];
+    sel.cuentas().filter(c => c.tipo === 'credito' && c.diaPago).forEach(c => {
+        const e = estadoPago(c, txs);
+        if (!e || e.pago <= 0 || e.pagada) return;
+        items.push({ fecha: e.fechaPago, html: `<a class="fila fila-link" href="#/cuenta/${encodeURIComponent(c.id)}">
+            ${monogramaHTML(c)}
+            <div class="fila-body"><div class="fila-titulo">Pago ${escapeHtml(c.nombre)}</div><div class="fila-sub">${e.pagada ? `Pagada · límite ${fechaCorta(e.fechaPago)}` : e.dias < 0 ? 'Vencida' : `Vence ${cuandoRelativo(e.fechaPago)}`}${!e.pagada && e.abonado > 0 ? ` · abonado <span class="privado">${money(e.abonado)}</span>` : ''}</div></div>
+            <div class="fila-der"><span class="num privado">${money(e.pagada ? e.pago : e.pendiente)}</span>${e.pagada ? '<span class="badge badge-pos">Pagada</span>' : e.dias <= 3 ? `<span class="badge ${e.dias < 0 ? 'badge-neg' : 'badge-warn'}">${e.dias < 0 ? 'Atrasado' : e.dias === 0 ? 'Hoy' : `${e.dias} d`}</span>` : ''}</div>
+        </a>`, prioridad: e.pagada ? 2 : 0 });
+    });
+    const recs = sel.recurrentes();
+    const pend = pendientes(recs);
+    pend.forEach(rec => items.push({ fecha: rec.proximaFecha, prioridad: 0, html: filaRec(rec, true) }));
+    proximos(recs, new Date(), 10).forEach(rec => items.push({ fecha: rec.proximaFecha, prioridad: 1, html: filaRec(rec, false) }));
+    items.sort((a, b) => a.prioridad - b.prioridad || a.fecha.localeCompare(b.fecha));
+    return `<section class="card">
+        <div class="card-head"><h2 class="card-title">Próximos pagos</h2>${pend.length > 1 ? `<button class="link" data-action="generarPendientes">Registrar todos (${pend.length})</button>` : '<a class="link" href="#/planear/recurrentes">Pagos fijos' + icon('chevron-right') + '</a>'}</div>
+        ${items.length ? `<div class="lista">${items.map(i => i.html).join('')}</div>` : vacioHTML('calendar', 'Nada pendiente en los próximos 10 días.')}
+    </section>`;
+}
+
+function filaRec(rec, pendiente) {
+    const cat = rec.tipo === 'gasto' ? sel.categoria(rec.categoriaId) : null;
+    return `<div class="fila">
+        <div ${cat ? icoCat(rec.categoriaId) : `class="fila-ico ${rec.tipo === 'ingreso' ? 'tono-pos' : ''}"`}>${icon(cat?.icono || 'coin')}</div>
+        <div class="fila-body"><div class="fila-titulo">${escapeHtml(rec.desc)}</div><div class="fila-sub">${pendiente ? `Pendiente desde ${cuandoRelativo(rec.proximaFecha).replace('hace ', '')}` : `Programado ${cuandoRelativo(rec.proximaFecha)}`} · ${escapeHtml(sel.cuenta(rec.cuentaId)?.nombre || 'Sin cuenta')}</div></div>
+        <div class="fila-der"><span class="num privado ${rec.tipo === 'ingreso' ? 'pos' : ''}">${rec.tipo === 'ingreso' ? '+' : ''}${money(rec.monto)}</span>
+            <button class="btn ${pendiente ? 'btn-primary' : 'btn-soft'} btn-sm" data-action="generarRecurrente" data-id="${escapeHtml(rec.id)}" style="margin-top:4px;">${pendiente ? 'Registrar' : 'Registrar ya'}</button></div>
+    </div>`;
+}
+
+// Categorías del mes; si hay más que colores, las menores se agrupan en "Otras".
+export function datosCategoriasMes(key = mesKey()) {
+    const { porCategoria, gastos } = resumenMes(sel.transacciones(), key);
+    let filas = Object.entries(porCategoria).map(([id, monto]) => ({ id, monto, nombre: sel.categoria(id).nombre, icono: sel.categoria(id).icono, color: colorCategoria(id) }))
+        .sort((a, b) => b.monto - a.monto);
+    if (filas.length > MAX_SERIES) {
+        const resto = filas.slice(MAX_SERIES - 1);
+        filas = [...filas.slice(0, MAX_SERIES - 1), { id: '_otras', nombre: 'Otras', icono: 'box', monto: resto.reduce((a, f) => a + f.monto, 0), color: 'var(--line-strong)' }];
+    }
+    return { filas, total: gastos };
+}
+
+function categoriasHTML() {
+    const { filas, total } = datosCategoriasMes();
+    return `<section class="card">
+        <div class="card-head"><h2 class="card-title">Gastos por categoría</h2><a class="link" href="#/analisis">Análisis${icon('chevron-right')}</a></div>
+        <div class="dona-layout">
+            <div class="dona"><canvas id="dona-cat" aria-label="Gastos por categoría"></canvas></div>
+            <ul class="leyenda-lista">${filas.length ? filas.map(f => `<li><i style="background:${f.color}"></i><span class="ll-nombre">${escapeHtml(f.nombre)}</span><span class="num privado">${money(f.monto)}</span><span class="ll-pct num">${total ? Math.round(f.monto / total * 100) : 0}%</span></li>`).join('') : '<li class="muted">Sin gastos este mes.</li>'}</ul>
+        </div>
+    </section>`;
+}
+
+// Proyección de fin de mes con tu dinero disponible (débito y efectivo).
+function proyeccionActual() {
+    return proyectarFinDeMes({ cuentas: sel.cuentas(), saldos: sel.saldos(), transacciones: sel.transacciones(), recurrentes: sel.recurrentes() });
+}
+
+function finMesHTML() {
+    if (!sel.cuentas().some(c => c.tipo !== 'credito')) return '';
+    const p = proyeccionActual();
+    const dia = Number(p.minimo.fecha.slice(8));
+    const titular = p.negativo
+        ? `<p class="fin-titular neg">El día ${dia} te faltarían <span class="num privado">${money(Math.abs(p.minimo.saldo))}</span></p>`
+        : `<p class="fin-titular">Cierras con <span class="num privado ${p.cierre >= p.disponible ? 'pos' : ''}">${money(p.cierre)}</span></p>`;
+    const chip = (signo, texto, monto) => monto ? `<span class="fin-chip"><b class="${signo === '+' ? 'pos' : ''}">${signo}</b>${texto} <span class="num privado">${money(monto)}</span></span>` : '';
+    return `<section class="card">
+        <div class="card-head"><h2 class="card-title">Fin de mes</h2><span class="card-meta">${p.diasRestantes ? `Faltan ${p.diasRestantes} día${p.diasRestantes === 1 ? '' : 's'}` : 'Hoy cierra el mes'}</span></div>
+        ${titular}
+        <p class="hint" style="margin-top:2px;">Hoy tienes <span class="privado">${money(p.disponible)}</span> disponibles en débito y efectivo${p.negativo ? '' : `; tu punto más bajo será el día ${dia} (<span class="privado">${money(p.minimo.saldo)}</span>)`}.</p>
+        <div class="grafica" style="height:70px; margin:12px 0 10px;"><canvas id="spark-fin" aria-label="Saldo disponible proyectado hasta fin de mes"></canvas></div>
+        <div class="fin-chips">
+            ${chip('+', 'Ingresos programados', p.detalle.ingresos)}
+            ${chip('−', 'Pagos de tarjeta', p.detalle.tarjetas)}
+            ${chip('−', 'Pagos fijos', p.detalle.recurrentes)}
+            ${chip('−', `Gasto diario (${money(p.diario)})`, p.detalle.variable)}
+        </div>
+    </section>`;
+}
+
+// Se ofrece el resumen del mes que terminó hasta que lo veas.
+// Pendientes de Inicio en una sola fila: pagos por revisar, el resumen del mes
+// listo y quien ya debió pagarte. Así "Tu dinero en total" queda siempre arriba.
+function pendientesHTML() {
+    const items = [];
+    const rev = pendienteRevisar();
+    if (rev) items.push({ attrs: 'data-action="abrirPorRevisar"', icono: 'credit-card', tono: 'warn', titulo: `${rev.n} por revisar`, sub: `<span class="privado">${money(rev.total)}</span> · Apple Pay` });
+    const vencidas = deudasTerceros(sel.cuentas(), sel.transacciones()).filter(d => !d.saldada && d.vencido > 0);
+    if (vencidas.length) items.push({
+        attrs: 'data-action="irA" data-href="#/te-deben"', icono: 'share', tono: 'warn',
+        titulo: vencidas.length === 1 ? `${escapeHtml(vencidas[0].nombre)} ya debió pagarte` : `${vencidas.length} te deben`,
+        sub: `<span class="privado">${money(vencidas.reduce((a, d) => a + d.vencido, 0))}</span> · registrar abono`,
+    });
+    const key = resumenPendiente();
+    if (key) items.push({ attrs: `data-action="anResumen" data-mes="${key}" data-pendiente`, icono: 'sparkle', tono: 'accent', titulo: `Tu ${nombreMes(key).toLowerCase()} en resumen`, sub: 'Ya está listo' });
+    if (!items.length) return '';
+    return `<div class="pendientes ${items.length === 1 ? 'uno' : ''}">${items.map(it => `<button class="pendiente" ${it.attrs}>
+        <span class="pendiente-ico tono-${it.tono}">${icon(it.icono)}</span>
+        <span class="pendiente-txt"><b>${it.titulo}</b><small>${it.sub}</small></span>
+    </button>`).join('')}</div>`;
+}
+
+export function render() {
+    return `${pendientesHTML()}${heroHTML()}
+        <div class="stack" style="margin-top:14px;">
+            ${cuentasHTML()}
+            ${mesHTML()}
+            ${finMesHTML()}
+            <div class="grid-2">${proximosHTML()}${categoriasHTML()}</div>
+        </div>`;
+}
+
+// El patrimonio cuenta desde la última cifra que viste cuando cambia.
+let netoMostrado = null;
+
+export function montar() {
+    const neto = sel.patrimonio().neto;
+    if (netoMostrado != null && Math.abs(netoMostrado - neto) > 0.009) contar(document.getElementById('hero-total'), netoMostrado, neto);
+    netoMostrado = neto;
+    const serie = seriePatrimonio(sel.cuentas(), sel.transacciones(), 6);
+    sparkline(document.getElementById('spark-neto'), serie.map(s => s.neto), 'sobre-acento');
+    const fin = document.getElementById('spark-fin');
+    if (fin) { const p = proyeccionActual(); sparkline(fin, p.serie.map(x => x.saldo), p.negativo ? 'neg' : 'accent'); }
+    const meses = serieMensual(sel.transacciones(), 6);
+    barrasIngresosGastos(document.getElementById('barras-mes'), meses.map(m => nombreMes(m.mes, 'short')), meses.map(m => m.ingresos), meses.map(m => m.gastos));
+    const { filas, total } = datosCategoriasMes();
+    const resuelto = filas.map(f => ({ ...f, color: f.color.startsWith('var(') ? getComputedStyle(document.documentElement).getPropertyValue(f.color.slice(4, -1)).trim() : f.color }));
+    donaCategorias(document.getElementById('dona-cat'), resuelto, total);
+}
