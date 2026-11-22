@@ -263,6 +263,38 @@ test('salud: triste gana a todo (gastos > ingresos o pago vencido)', () => {
     assert.match(vencido.mensaje, /venció/);
 });
 
+test('salud: sin movimientos no hay puntaje (nada de "Bien" regalado)', () => {
+    const t = evaluarSalud(basesSalud([]), HOY);
+    assert.equal(t.estado, 'tranquilo');
+    assert.equal(t.puntaje, null);
+    assert.equal(t.etiqueta, 'Sin datos');
+});
+
+test('salud: estado triste con puntaje alto no se etiqueta "Bien"', () => {
+    // Todo en orden salvo Comida al 117 % del presupuesto: el puntaje suma
+    // alto, pero la etiqueta debe reflejar que algo ya va mal.
+    const cat = [{ id: 'comida', nombre: 'Comida', presupuesto: 1000 }];
+    const txs = [
+        { tipo: 'ingreso', monto: 20000, fecha: '2026-09-01', cuentaId: 'deb' },
+        { tipo: 'gasto', monto: 1170, fecha: '2026-09-02', cuentaId: 'deb', categoriaId: 'comida' },
+        { tipo: 'gasto', monto: 5000, fecha: '2026-09-03', cuentaId: 'deb' },
+    ];
+    const s = evaluarSalud(basesSalud(txs, { categorias: cat }), HOY);
+    assert.equal(s.estado, 'triste');
+    assert.ok(s.puntaje >= 65, `puntaje ${s.puntaje} debería seguir siendo alto`);
+    assert.equal(s.etiqueta, 'Regular');
+    assert.ok(s.factores.every(f => f.nivel !== 'sin' || f.id === 'fondo'));
+});
+
+test('salud: los factores sin datos no cuentan en el puntaje', () => {
+    // Sin presupuestos ni historial de fondo: el denominador es solo de los
+    // factores con datos, no 100/110 fijos.
+    const s = evaluarSalud(basesSalud([{ tipo: 'ingreso', monto: 10000, fecha: '2026-09-01', cuentaId: 'deb' }, { tipo: 'gasto', monto: 8500, fecha: '2026-09-27', cuentaId: 'deb' }]), HOY);
+    const contados = s.factores.filter(f => f.nivel !== 'sin');
+    const esperado = Math.round(contados.reduce((a, f) => a + f.peso * f.puntos, 0) / contados.reduce((a, f) => a + f.peso, 0) * 100);
+    assert.equal(s.puntaje, esperado);
+});
+
 test('consejos: hay suficientes y no se repite el anterior', () => {
     assert.ok(CONSEJOS.length >= 30);
     const a = consejoAlAzar();

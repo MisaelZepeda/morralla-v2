@@ -7,6 +7,8 @@ import { barrasIngresosGastos, sparkline, donaCategorias, colorSerie, MAX_SERIES
 import { seriePatrimonio } from '../domain/saldos.js';
 import { resumenMes, serieMensual, variacion } from '../domain/analisis.js';
 import { estadoPago } from '../domain/tarjetas.js';
+import { evaluarSalud } from '../domain/salud.js';
+import { tlacoSVG } from '../components/tlaco.js';
 import { resumenPendiente } from '../components/resumen-mes.js';
 import { contar } from '../components/efectos.js';
 import { deudasTerceros } from '../domain/terceros.js';
@@ -183,8 +185,42 @@ function pendientesHTML() {
     </button>`).join('')}</div>`;
 }
 
+// Tu salud financiera: puntaje, estado real de Tlaco y qué hacer al respecto.
+// Antes evaluarSalud no tenía ningún llamador en producción.
+function saludHTML() {
+    const s = evaluarSalud({
+        cuentas: sel.cuentas(), saldos: sel.saldos(), transacciones: sel.transacciones(),
+        categorias: sel.categorias(), metas: sel.metas(), recurrentes: sel.recurrentes(),
+    });
+    const badge = s.etiqueta === 'Excelente' || s.etiqueta === 'Bien' ? 'badge-pos'
+        : s.etiqueta === 'Regular' ? 'badge-warn'
+        : s.etiqueta === 'Necesita atención' ? 'badge-neg' : '';
+    const puntaje = s.puntaje == null
+        ? '<p class="salud-puntaje"><b>—</b><span class="muted"> / 100</span></p>'
+        : `<p class="salud-puntaje"><b class="num">${s.puntaje}</b><span class="muted"> / 100</span></p>`;
+    const accion = s.accion
+        ? `<button class="btn btn-primary btn-sm" data-action="${escapeHtml(s.accion.action)}" data-id="${escapeHtml(s.accion.id || '')}">${escapeHtml(s.accion.texto)}</button>`
+        : s.ruta ? `<a class="btn btn-soft btn-sm" href="${escapeHtml(s.ruta)}">Ver detalle${icon('chevron-right')}</a>` : '';
+    const nivelTxt = { bien: 'Bien', regular: 'Regular', mal: 'Atención', sin: 'Sin datos' };
+    return `<section class="card salud-card">
+        <div class="card-head"><h2 class="card-title">Tu salud financiera</h2><span class="badge ${badge}">${escapeHtml(s.etiqueta)}</span></div>
+        <div class="salud-cuerpo">
+            <div class="salud-tlaco">${tlacoSVG(s.estado, { tamano: 76 })}</div>
+            <div class="salud-info">
+                ${puntaje}
+                <p class="salud-mensaje">${escapeHtml(s.mensaje)}</p>
+                <p class="hint">${escapeHtml(s.sugerencia)}</p>
+                ${accion}
+            </div>
+        </div>
+        <details class="salud-factores"><summary>Ver los ${s.factores.length} factores</summary>
+            <ul class="salud-lista">${s.factores.map(f => `<li><i class="salud-dot nivel-${f.nivel}"></i><span>${escapeHtml(f.titulo)}</span><span class="muted">${escapeHtml(f.detalle)}</span><b class="num">${escapeHtml(f.valor)}</b><span class="muted">${nivelTxt[f.nivel] || ''}</span></li>`).join('')}</ul>
+        </details>
+    </section>`;
+}
+
 export function render() {
-    return `${pendientesHTML()}${heroHTML()}
+    return `${pendientesHTML()}${heroHTML()}${saludHTML()}
         <div class="stack" style="margin-top:14px;">
             ${cuentasHTML()}
             ${mesHTML()}

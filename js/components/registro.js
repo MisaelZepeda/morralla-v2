@@ -20,7 +20,8 @@ const TITULOS = { gasto: 'Gasto', ingreso: 'Ingreso', transferencia: 'Transferen
 const MSI = [0, 3, 6, 9, 12, 18];
 
 // abrirRegistro({ tipo, id (editar), cuentaId, cuentaDestinoId, subtipo,
-//                 monto, desc, categoriaId (prellenado: favoritos y Siri) })
+//                 monto, desc, categoriaId (prellenado: favoritos y Siri),
+//                 pagoTarjeta: { total, pendiente, abonado } })
 export function abrirRegistro(opts = {}) {
     const tx = opts.id ? sel.transaccion(opts.id) : null;
     const tipo = tx?.tipo || opts.tipo || 'gasto';
@@ -33,6 +34,7 @@ export function abrirRegistro(opts = {}) {
         catSugerida: false,
         cuentaId: tx?.cuentaId || opts.cuentaId || null,
         cuentaDestinoId: tx?.cuentaDestinoId || opts.cuentaDestinoId || null,
+        pagoTarjeta: opts.pagoTarjeta || null,   // pagar tarjeta: { total, pendiente, abonado } del estado vigente
         subtipo: tx?.subtipo || opts.subtipo || null,
         msi: tx?.msi || 0,
         fecha: tx?.fecha || opts.fecha || hoyISO(),
@@ -239,6 +241,25 @@ function opcionesResumen() {
     return partes.map(escapeHtml).join(' · ');
 }
 
+// Chips rápidos al pagar una tarjeta: total del estado, lo que falta por
+// pagar y otro monto. Solo cuando el destino es crédito y hay algo por pagar.
+function pagoChipsHTML() {
+    const p = r.pagoTarjeta;
+    if (r.tipo !== 'transferencia' || !p || !(p.total > 0) || !(p.pendiente > 0)) return '';
+    if (sel.cuenta(r.cuentaDestinoId)?.tipo !== 'credito') return '';
+    const actual = Math.round(montoNum() * 100) / 100;
+    const chip = (valor, texto, activo) => `<button type="button" class="chip chip-sm ${activo ? 'activo' : ''}" data-action="regPagoChip" data-m="${valor ?? ''}">${texto}</button>`;
+    const lista = [chip(p.total, `Total ${money(p.total)}`, actual === p.total)];
+    if (p.pendiente < p.total) lista.push(chip(p.pendiente, `Pendiente ${money(p.pendiente)}`, actual === p.pendiente));
+    lista.push(chip(null, 'Otro monto', actual > 0 && actual !== p.total && actual !== p.pendiente));
+    return `<div class="field" style="margin-bottom:12px;"><span class="label">Monto a pagar</span><div class="chips">${lista.join('')}</div></div>`;
+}
+
+function msiHTML() {
+    return `<div class="field"><span class="label">Meses sin intereses</span><div class="chips">${MSI.map(m =>
+        `<button type="button" class="chip chip-sm ${Number(r.msi || 0) === m ? 'activo' : ''}" data-action="regMsi" data-m="${m}">${m ? `${m} meses` : 'De contado'}</button>`).join('')}</div></div>`;
+}
+
 function cuerpoHTML() {
     const cuenta = sel.cuenta(r.cuentaId);
     const esCred = cuenta?.tipo === 'credito';
@@ -247,7 +268,9 @@ function cuerpoHTML() {
 
     // Esencial: en transferencias, desde y hacia.
     let esencial = '';
-    if (r.tipo === 'gasto') esencial = `<div class="field" id="reg-cats">${categoriasHTML()}</div>`;
+    // En un gasto con tarjeta de crédito el MSI va a la vista, no escondido
+    // en "Más opciones": es el uso diario de Morralla.
+    if (r.tipo === 'gasto') esencial = `<div class="field" id="reg-cats">${categoriasHTML()}</div>${esCred ? msiHTML() : ''}`;
     else if (r.tipo === 'transferencia') {
         esencial = `<div class="field"><span class="label">Desde</span>${chipsCuentas('regCuenta', r.cuentaId)}</div>
             <div class="field"><span class="label">Hacia</span>${chipsCuentas('regDestino', r.cuentaDestinoId, c => c.id !== r.cuentaId)}</div>`;
@@ -266,8 +289,6 @@ function cuerpoHTML() {
                 </label>
             </div>
         </div>`;
-    if (r.tipo === 'gasto' && esCred) opciones += `<div class="field"><span class="label">Meses sin intereses</span><div class="chips">${MSI.map(m =>
-        `<button type="button" class="chip chip-sm ${Number(r.msi || 0) === m ? 'activo' : ''}" data-action="regMsi" data-m="${m}">${m ? `${m} meses` : 'De contado'}</button>`).join('')}</div></div>`;
     if (r.tipo === 'ingreso') {
         const subs = [['', 'Ingreso'], esCred ? ['cashback', 'Cashback'] : ['rendimiento', 'Rendimiento']];
         opciones += `<div class="field"><span class="label">Tipo de ingreso</span><div class="chips">${subs.map(([v, t]) =>
@@ -287,6 +308,7 @@ function cuerpoHTML() {
         <div class="monto-display">${montoHTML()}</div>
         <input id="reg-monto" class="monto-input-desktop" inputmode="decimal" autocomplete="off" placeholder="$0.00" value="${escapeHtml(r.montoTxt)}" data-input="regMontoInput" aria-label="Monto (acepta + − ×)">
         <p class="calc-preview num">${tieneOperacion(r.montoTxt) ? `= ${money(evaluar(r.montoTxt) || 0)}` : ''}</p>
+        ${pagoChipsHTML()}
         <div class="teclado" style="margin-bottom:16px;">
             ${['1', '2', '3', 'del', '4', '5', '6', '×', '7', '8', '9', '−', '.', '0', '=', '+'].map(k => k === 'del'
                 ? `<button type="button" class="tecla-op" data-action="regTecla" data-k="del" aria-label="Borrar último dígito">${icon('backspace')}</button>`
@@ -405,7 +427,7 @@ function agregarEtiqueta(texto) {
 
 // ---------- Eventos ----------
 on('regTipo', (el) => {
-    r.tipo = el.dataset.t; r.subtipo = null; r.msi = 0;
+    r.tipo = el.dataset.t; r.subtipo = null; r.msi = 0; r.pagoTarjeta = null;
     r.cuentaId = cuentaSugerida(r.tipo, r.categoriaId) || r.cuentaId;
     if (r.tipo === 'transferencia') r.cuentaDestinoId = destinoSugerido();
     pintar();
@@ -419,7 +441,13 @@ on('regCuenta', (el) => {
     if (sel.cuenta(r.cuentaId)?.tipo !== 'credito') r.msi = 0;
     pintar();
 });
-on('regDestino', (el) => { r.cuentaDestinoId = el.dataset.id; pintar(); });
+on('regDestino', (el) => { r.cuentaDestinoId = el.dataset.id; r.pagoTarjeta = null; pintar(); });
+on('regPagoChip', (el) => {
+    const otro = el.dataset.m === '';
+    r.montoTxt = otro ? '' : String(Number(el.dataset.m));
+    pintar();
+    if (otro) hojaAbierta()?.querySelector('#reg-monto')?.focus();
+});
 on('regSub', (el) => { r.subtipo = el.dataset.v || null; pintar(); });
 on('regMsi', (el) => { r.msi = Number(el.dataset.m); pintar(); });
 on('regFecha', (el) => { r.fecha = el.dataset.f; pintar(); });

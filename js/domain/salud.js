@@ -141,7 +141,14 @@ export function evaluarSalud({ cuentas = [], saldos = {}, transacciones = [], ca
         ? { texto: `Zzz… hace ${diasSin} días que no registras nada.`, sugerencia: 'Anota tus gastos de estos días para que tus números sigan al día.', ruta: '#/movimientos', accion: { texto: 'Registrar un gasto', action: 'nuevo' } }
         : null;
 
-    const puntaje = r0(factores.reduce((a, f) => a + f.peso * f.puntos, 0) / factores.reduce((a, f) => a + f.peso, 0) * 100);
+    // El puntaje solo cuenta los factores con datos reales: un factor "sin
+    // datos" no suma puntos regalados ni pesa en el denominador. Y sin ningún
+    // movimiento registrado no hay puntaje que mostrar: un usuario nuevo no
+    // está ni bien ni mal, simplemente aún no hay datos (antes salía ~69 "Bien").
+    const conDatos = factores.filter(f => f.nivel !== 'sin');
+    const puntaje = !transacciones.length || !conDatos.length
+        ? null
+        : r0(conDatos.reduce((a, f) => a + f.peso * f.puntos, 0) / conDatos.reduce((a, f) => a + f.peso, 0) * 100);
 
     let estado, motivo;
     if (motivos.triste.length) { estado = 'triste'; motivo = motivos.triste[0]; }
@@ -154,6 +161,11 @@ export function evaluarSalud({ cuentas = [], saldos = {}, transacciones = [], ca
         ? { texto: 'Este mes tus ingresos y gastos van parejos.', sugerencia: 'Un presupuesto por categoría te ayuda a decidir dónde recortar.', ruta: '#/planear/presupuestos' }
         : { texto: 'Aún no hay movimientos este mes.', sugerencia: 'Registra tu primer ingreso o gasto con el botón +.', ruta: '#/movimientos' }; }
 
-    const etiqueta = puntaje >= 80 ? 'Excelente' : puntaje >= 65 ? 'Bien' : puntaje >= 45 ? 'Regular' : 'Necesita atención';
+    let etiqueta = puntaje == null ? 'Sin datos' : puntaje >= 80 ? 'Excelente' : puntaje >= 65 ? 'Bien' : puntaje >= 45 ? 'Regular' : 'Necesita atención';
+    // Coherencia estado ↔ etiqueta: si Tlaco está triste o preocupado, la
+    // etiqueta no puede decir "Bien" ni "Excelente" aunque el resto de los
+    // factores sumen alto (p. ej. un presupuesto rebasado con todo lo demás
+    // en orden: antes salía estado triste con 75 "Bien").
+    if ((estado === 'triste' || estado === 'preocupado') && (etiqueta === 'Excelente' || etiqueta === 'Bien')) etiqueta = 'Regular';
     return { estado, puntaje, etiqueta, factores, mensaje: motivo.texto, sugerencia: motivo.sugerencia, ruta: motivo.ruta, accion: motivo.accion || null, mes };
 }

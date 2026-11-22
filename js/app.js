@@ -17,6 +17,7 @@ import { construirDemo } from './lib/demo-data.js';
 import { compartirTarjeta } from './lib/compartir.js';
 import { migrarV1 } from './domain/migracion.js';
 import { pendientes } from './domain/recurrentes.js';
+import { estadoPago } from './domain/tarjetas.js';
 import { hoyISO } from './domain/fechas.js';
 import { mostrarAcceso, ocultarAcceso, mostrarMigracion, nombreRegistro } from './views/acceso.js';
 import { confirmarMigracion, selectorTema } from './views/ajustes.js';
@@ -224,7 +225,16 @@ function pagarTarjeta(tarjetaId) {
     // Origen: la cuenta con la que se pagó esta tarjeta la última vez.
     const ultimo = sel.transacciones().find(t => t.tipo === 'transferencia' && t.cuentaDestinoId === tarjetaId && sel.cuenta(t.cuentaId));
     const origen = ultimo ? sel.cuenta(ultimo.cuentaId) : (sel.cuentas().find(c => c.tipo === 'debito') || sel.cuentas().find(c => c.tipo !== 'credito'));
-    abrirRegistro({ tipo: 'transferencia', cuentaId: origen?.id, cuentaDestinoId: tarjetaId });
+    // Monto prellenado: lo que falta por pagar del estado vigente. Si el
+    // estado ya está cubierto, no se prellena nada (flujo actual).
+    const tarjeta = sel.cuenta(tarjetaId);
+    const e = tarjeta ? estadoPago(tarjeta, sel.transacciones()) : null;
+    const pagoTarjeta = e && e.pago > 0 ? { total: e.pago, pendiente: e.pendiente, abonado: e.abonado } : null;
+    abrirRegistro({
+        tipo: 'transferencia', cuentaId: origen?.id, cuentaDestinoId: tarjetaId,
+        monto: pagoTarjeta && pagoTarjeta.pendiente > 0 ? pagoTarjeta.pendiente : undefined,
+        pagoTarjeta,
+    });
 }
 on('pagarTarjeta', (el) => pagarTarjeta(id(el)));
 on('marcarPagada', async (el) => { await A.marcarTarjetaPagada(id(el), true); toast('Tarjeta marcada como pagada'); });

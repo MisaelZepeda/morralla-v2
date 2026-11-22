@@ -5,7 +5,7 @@
 
 import { on } from '../core/eventos.js';
 import { borrarTransaccion } from '../core/actions.js';
-import { toast } from './capas.js';
+import { toast, confirmar } from './capas.js';
 import { rutaActual } from '../core/router.js';
 import { icon } from '../lib/icons.js';
 
@@ -73,6 +73,10 @@ document.addEventListener('click', (e) => {
 
 on('swipeBorrar', async (el) => {
     cerrarAbierta();
+    // Igual que borrar desde el detalle o el editor: siempre se confirma.
+    // Antes el swipe borraba directo y solo quedaba el toast de Deshacer.
+    const ok = await confirmar({ titulo: '¿Borrar este movimiento?', texto: 'Podrás deshacerlo justo después.', aceptar: 'Borrar', peligro: true });
+    if (!ok) return;
     const deshacer = await borrarTransaccion(el.dataset.id);
     toast('Movimiento eliminado', { deshacer });
 });

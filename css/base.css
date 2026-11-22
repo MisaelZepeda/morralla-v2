@@ -77,7 +77,7 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .btn-soft:hover { background: var(--surface-3); }
 .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
 .btn-ghost:hover { background: var(--surface-2); }
-.btn-danger { background: var(--neg); color: #fff; }
+.btn-danger { background: var(--neg); color: var(--on-neg); }
 .btn-danger-soft { background: var(--neg-soft); color: var(--neg); }
 .link { color: var(--accent-ink); font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 2px; cursor: pointer; }
 .link .icon { width: 14px; height: 14px; }

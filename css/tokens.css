@@ -32,6 +32,8 @@
     --neg: #d92d3a;
     --warn: #b45309;
     --info: #2563eb;
+    /* Texto sobre fondo de peligro (ver el bloque oscuro: ahí cambia). */
+    --on-neg: #ffffff;
 
     --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
     --pos-soft: color-mix(in srgb, var(--pos) 11%, transparent);
@@ -57,7 +59,11 @@
     --t: 220ms;
 
     --sidebar: 248px;
-    --tabbar: 68px;
+    /* Alto real de la barra flotante de cristal: 64 px de cuerpo + 22 px del
+       hueco de la burbuja (css/cristal.css). Toasts, aviso de actualización y
+       el padding inferior de la vista se calculan desde aquí: si este valor
+       es menor que la barra, esos elementos quedan tapados por ella. */
+    --tabbar: 86px;
     --max: 1120px;
 }
 
@@ -82,6 +88,10 @@
     --neg: #ff7a7f;
     --warn: #ffc857;
     --info: #7cb8ff;
+    /* Texto sobre fondo de peligro: en claro va blanco sobre rojo oscuro,
+       pero en oscuro el rojo es claro (#ff7a7f) y el blanco sobre él solo da
+       2.5:1. En oscuro el texto de peligro es oscuro sobre rojo claro (7:1). */
+    --on-neg: #1a1530;
 
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
     --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
@@ -95,7 +105,10 @@
 :root[data-accent="cobre"] { --accent: #e8894a; --accent-ink: #b4501c; --on-accent: #1a1206; }
 :root[data-accent="menta"] { --accent: #2fb89a; --accent-ink: #0f766e; --on-accent: #062a22; }
 :root[data-accent="cielo"] { --accent: #3b8cf0; --accent-ink: #1d4ed8; --on-accent: #ffffff; }
-:root[data-theme="dark"][data-accent="laton"] { --accent-ink: #f2b544; }
-:root[data-theme="dark"][data-accent="cobre"] { --accent-ink: #f0a06a; }
-:root[data-theme="dark"][data-accent="menta"] { --accent: #6fdcc4; --accent-ink: #6fdcc4; }
-:root[data-theme="dark"][data-accent="cielo"] { --accent-ink: #8cc8ff; }
+/* En oscuro cada acento redefine --accent además de --accent-ink: si solo
+   cambia la tinta, el relleno seguiría siendo violeta (#6a4dff) y el acento
+   se vería roto (antes solo menta redefinía --accent). */
+:root[data-theme="dark"][data-accent="laton"] { --accent: #f2b544; --accent-ink: #f2b544; --on-accent: #1a1206; }
+:root[data-theme="dark"][data-accent="cobre"] { --accent: #e8894a; --accent-ink: #f0a06a; --on-accent: #1a1206; }
+:root[data-theme="dark"][data-accent="menta"] { --accent: #6fdcc4; --accent-ink: #6fdcc4; --on-accent: #062a22; }
+:root[data-theme="dark"][data-accent="cielo"] { --accent: #3b8cf0; --accent-ink: #8cc8ff; --on-accent: #ffffff; }
